@@ -1,0 +1,65 @@
+{
+  "projectType": "webapp",
+  "setup": [
+    {
+      "command": "npm",
+      "args": ["ci"],
+      "cwd": "C:\\Users\\kavin\\Downloads\\ITRO-development",
+      "timeoutSeconds": 600
+    }
+  ],
+  "assertions": [
+    {
+      "name": "production-build-and-prerender",
+      "kind": "process",
+      "command": "npm",
+      "args": ["run", "build"],
+      "env": {
+        "VITE_API_URL": "https://itro.co.in/api",
+        "VITE_SITE_URL": "https://itro.co.in"
+      },
+      "verificationMethod": "exit-code",
+      "expected": "0",
+      "timeoutSeconds": 900
+    },
+    {
+      "name": "tests-pass",
+      "kind": "process",
+      "command": "npm",
+      "args": ["test"],
+      "verificationMethod": "test-results",
+      "expected": "0",
+      "timeoutSeconds": 300
+    },
+    {
+      "name": "homepage-serves",
+      "kind": "http-probe",
+      "startCommand": "npm",
+      "startArgs": ["run", "dev"],
+      "url": "http://localhost:5000/",
+      "verificationMethod": "http-status",
+      "expected": "200",
+      "timeoutSeconds": 120
+    },
+    {
+      "name": "robots-publishes-sitemap",
+      "kind": "http-probe",
+      "startCommand": "npm",
+      "startArgs": ["run", "dev"],
+      "url": "http://localhost:5000/robots.txt",
+      "verificationMethod": "output-contains",
+      "expected": "Sitemap: https://itro.co.in/sitemap.xml",
+      "timeoutSeconds": 120
+    },
+    {
+      "name": "sitemap-contains-public-routes",
+      "kind": "http-probe",
+      "startCommand": "npm",
+      "startArgs": ["run", "dev"],
+      "url": "http://localhost:5000/sitemap.xml",
+      "verificationMethod": "output-contains",
+      "expected": "<urlset",
+      "timeoutSeconds": 120
+    }
+  ]
+}

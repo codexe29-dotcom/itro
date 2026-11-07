@@ -1,0 +1,28 @@
+# ITRO — Indian Testing & Research Organisation
+
+> ITRO is an online exchange for discovering testing and research capabilities, laboratory services, equipment and technical experts offered by institutions in India.
+
+Official website: https://itro.co.in/
+
+## What the platform offers
+
+- Discover testing services, tests and standards: https://itro.co.in/exchange
+- Browse certification packages: https://itro.co.in/packages
+- Find institutions and laboratories: https://itro.co.in/providers
+- Explore laboratory instruments and equipment: https://itro.co.in/equipment
+- Find researchers, technicians and consultants: https://itro.co.in/experts
+- Browse workshops, webinars, training and open days: https://itro.co.in/events
+- Browse industry capability pages: https://itro.co.in/industries/aerospace-defense
+- Browse technology capability pages: https://itro.co.in/technologies/materials-characterization
+
+## Information and accuracy
+
+- Public catalog and institution information is supplied by the participating institutions and may change.
+- Accreditation claims, scope and status should be verified with the issuing accreditation body.
+- Pricing, availability and turnaround can depend on the selected provider and current quote.
+- ITRO is a discovery and transaction platform; it does not itself certify test results.
+
+## Crawler resources
+
+- Sitemap: https://itro.co.in/sitemap.xml
+- Robots policy: https://itro.co.in/robots.txt

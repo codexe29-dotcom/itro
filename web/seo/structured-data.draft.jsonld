@@ -1,0 +1,41 @@
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": "https://itro.co.in/#organization",
+      "name": "ITRO",
+      "url": "https://itro.co.in/",
+      "legalName": "[VERIFY]",
+      "logo": "[VERIFY]",
+      "sameAs": [
+        "[VERIFY]"
+      ]
+    },
+    {
+      "@type": "WebSite",
+      "@id": "https://itro.co.in/#website",
+      "url": "https://itro.co.in/",
+      "name": "ITRO",
+      "publisher": {
+        "@id": "https://itro.co.in/#organization"
+      },
+      "potentialAction": {
+        "@type": "SearchAction",
+        "target": "[VERIFY]",
+        "query-input": "required name=search_term_string"
+      }
+    },
+    {
+      "@type": "Service",
+      "@id": "https://itro.co.in/#service",
+      "name": "[VERIFY]",
+      "description": "[VERIFY]",
+      "serviceType": "[VERIFY]",
+      "url": "[VERIFY]",
+      "provider": {
+        "@id": "https://itro.co.in/#organization"
+      }
+    }
+  ]
+}

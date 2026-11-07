@@ -1,0 +1,967 @@
+// RIX — multi-tenant Research Infrastructure Exchange
+// Generic & configurable: institutions are tenants; nothing customer-specific is hardcoded.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------------------------------------------------
+// Enums
+// ------------------------------------------------------------------
+enum Role {
+  SUPER_ADMIN
+  INSTITUTION_ADMIN
+  LAB_MANAGER
+  OPERATOR
+  FACULTY
+  RESEARCHER
+  INDUSTRY_BUYER
+}
+
+enum InstitutionType {
+  UNIVERSITY
+  ENGINEERING_COLLEGE
+  MEDICAL_COLLEGE
+  NATIONAL_LAB
+  PRIVATE_RND
+  INCUBATOR
+  INDUSTRY
+}
+
+enum InstrumentStatus {
+  AVAILABLE
+  BOOKED
+  MAINTENANCE
+  OFFLINE
+}
+
+enum BookingStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+  COMPLETED
+}
+
+enum OrderStatus {
+  DRAFT              // buyer building request
+  QUOTE_REQUESTED    // RFQ submitted
+  QUOTED             // institution issued quote
+  ACCEPTED           // buyer accepted quote
+  NDA_PENDING        // awaiting NDA e-sign
+  SAMPLE_AWAITED     // awaiting sample receipt
+  IN_PROGRESS        // testing underway
+  REPORT_READY       // report uploaded
+  COMPLETED          // delivered & closed
+  CANCELLED
+}
+
+enum PricingTier {
+  INTERNAL
+  ACADEMIC
+  INDUSTRY
+}
+
+enum PricingMode {
+  QUOTE // Request for Quote — provider quotes later
+  FIXED // Listed price — buyer can order/pay directly
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PAID
+  VOID
+  OVERDUE
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+enum SettlementStatus {
+  PENDING
+  RELEASED
+  ON_HOLD
+}
+
+enum TestRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// ------------------------------------------------------------------
+// Tenancy & identity
+// ------------------------------------------------------------------
+model Institution {
+  id             String          @id @default(cuid())
+  name           String
+  slug           String          @unique          // subdomain / URL key
+  type           InstitutionType @default(UNIVERSITY)
+  addressLine1   String?
+  addressLine2   String?
+  city           String?
+  state          String?
+  postalCode     String?
+  country        String          @default("India")
+  about          String?
+  logoUrl        String?
+  themeColor     String          @default("#4f46e5")
+  currency       String          @default("INR")
+  taxRate        Float           @default(0.18)    // configurable GST/tax
+  accreditations String[]        @default([])       // e.g. ["NABL", "ISO 17025"]
+  isPublished    Boolean         @default(true)     // listed on the exchange
+  onExchange     Boolean         @default(true)
+  latitude       Float?
+  longitude      Float?
+  feeMode        String?                            // per-provider platform-fee override (null = use global)
+  feeValue       Float?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  users        User[]
+  facilities   Facility[]
+  services     Service[]
+  orders       ServiceOrder[]
+  invoices     Invoice[]
+  experts      Expert[]
+  testRequests TestRequest[]
+  accreditationRecords Accreditation[]
+  coupons       Coupon[]
+  creditEntries CreditEntry[]
+  serviceBundles ServiceBundle[]
+  events        Event[]
+}
+
+// A lab's accreditation as first-class, scope-verified data (not just a badge string).
+// Powers scope filtering, expiry monitoring and live certificate verification.
+model Accreditation {
+  id            String       @id @default(cuid())
+  institutionId String
+  institution   Institution  @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  body          String       // e.g. "NABL", "ISO/IEC 17025", "A2LA", "BIS"
+  certNumber    String?      // certificate / accreditation number
+  scope         String[]     @default([])  // disciplines / test categories covered
+  issuedAt      DateTime?
+  expiresAt     DateTime?    // drives ACTIVE / EXPIRING / EXPIRED status
+  verifyUrl     String?      // link to the issuing body's public verification page
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+}
+
+model User {
+  id            String   @id @default(cuid())
+  role          Role
+  name          String
+  email         String   @unique
+  passwordHash  String
+  phone         String?
+  orgName       String?  // for external / industry buyers
+  isActive      Boolean  @default(true)
+  institutionId String?  // null for platform super-admins & external buyers
+  institution   Institution? @relation(fields: [institutionId], references: [id])
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  bookings        Booking[]
+  buyerOrders     ServiceOrder[] @relation("BuyerOrders")
+  carts           Order[]        @relation("BuyerCarts")
+  trainings       Training[]
+  reviews         Review[]
+  auditLogs       AuditLog[]
+  orderDocuments  OrderDocument[]
+  orderMessages   OrderMessage[]
+  couponRedemptions CouponRedemption[]
+  creditEntries   CreditEntry[]
+  eventRegistrations EventRegistration[]
+}
+
+// ------------------------------------------------------------------
+// Facilities & assets
+// ------------------------------------------------------------------
+model Facility {
+  id            String   @id @default(cuid())
+  institutionId String
+  institution   Institution @relation(fields: [institutionId], references: [id])
+  name          String
+  department    String?
+  description   String?
+  location      String?
+  // A facility is an independently-run lab: its own in-charge/team, contact and accreditations.
+  inchargeName  String?
+  contactEmail  String?
+  contactPhone  String?
+  accreditations String[] @default([])
+  imageUrl      String?
+  openingHours  Json?    // weekly hours: { "mon": {"open":"09:00","close":"18:00"}, ..., "sun": null }
+  timezone      String?  @default("Asia/Kolkata")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  instruments Instrument[]
+  services    Service[]
+  holidays    Holiday[]
+  events      Event[]
+}
+
+model Holiday {
+  id         String   @id @default(cuid())
+  facilityId String
+  facility   Facility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  date       DateTime
+  name       String?
+  createdAt  DateTime @default(now())
+}
+
+model MaintenanceWindow {
+  id           String     @id @default(cuid())
+  instrumentId String
+  instrument   Instrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+  startAt      DateTime
+  endAt        DateTime
+  reason       String?
+  createdAt    DateTime   @default(now())
+}
+
+// ------------------------------------------------------------------
+// Events & workshops (community engagement — hosted by a lab/facility)
+// ------------------------------------------------------------------
+model Event {
+  id            String      @id @default(cuid())
+  institutionId String
+  institution   Institution @relation(fields: [institutionId], references: [id])
+  facilityId    String?
+  facility      Facility?   @relation(fields: [facilityId], references: [id])
+  title         String
+  slug          String      @unique
+  description   String?
+  type          String      @default("WORKSHOP") // WORKSHOP | WEBINAR | TRAINING | OPEN_DAY | CONFERENCE
+  mode          String      @default("IN_PERSON") // IN_PERSON | ONLINE | HYBRID
+  location      String?
+  onlineUrl     String?
+  imageUrl      String?
+  startAt       DateTime
+  endAt         DateTime?
+  capacity      Int?        // null = unlimited
+  price         Float       @default(0) // 0 = free
+  isPublished   Boolean     @default(true)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  registrations EventRegistration[]
+
+  @@index([institutionId])
+  @@index([startAt])
+}
+
+model EventRegistration {
+  id        String   @id @default(cuid())
+  eventId   String
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  status    String   @default("REGISTERED") // REGISTERED | CANCELLED | WAITLIST
+  name      String?
+  email     String?
+  createdAt DateTime @default(now())
+
+  @@unique([eventId, userId])
+}
+
+model Instrument {
+  id              String           @id @default(cuid())
+  facilityId      String
+  facility        Facility         @relation(fields: [facilityId], references: [id])
+  name            String
+  category        String           // SEM, TEM, XRD, UTM, NMR, CNC, etc.
+  make            String?
+  model           String?
+  specs           Json?            // arbitrary structured specs
+  description     String?
+  imageUrl        String?
+  images          String[]         @default([]) // photo gallery
+  applications    String[]         @default([]) // what the machine is used for (use-cases)
+  status          InstrumentStatus @default(AVAILABLE)
+  accreditation   String?          // certification, e.g. "ISO 17025" / "NABL"
+  certifications  Json?            @default("[]") // rich accreditations: [{ body, number, scope, validFrom, validUntil, documentUrl }]
+  industries      String[]         @default([]) // applicable industries
+  hourlyRate      Float            @default(0)
+  trainingRequired Boolean         @default(true)
+  maxSampleSpec   Json?            // sample envelope the setup accepts: { maxLengthMm, maxWidthMm, maxHeightMm, maxWeightKg, notes }
+  netTestHours    Float?           // net test hours per cycle, excluding pre/post-test check processes
+  lastCalibratedAt DateTime?
+  nextCalibrationAt DateTime?
+  uptimePct       Float?
+  // Capacity & scheduling configuration
+  capacityType     String          @default("TIME_SLOT") // TIME_SLOT | THROUGHPUT
+  concurrency      Int             @default(1)
+  throughputPerDay Int?
+  slotMinutes      Int             @default(60)
+  setupMinutes     Int             @default(0)
+  leadTimeDays     Int             @default(0)
+  requiresOperator Boolean         @default(false)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  bookings           Booking[]
+  services           Service[]
+  trainings          Training[]
+  maintenance        MaintenanceLog[]
+  documents          InstrumentDocument[]
+  maintenanceWindows MaintenanceWindow[]
+  reservations       CapacityReservation[]
+}
+
+model InstrumentDocument {
+  id           String     @id @default(cuid())
+  instrumentId String
+  instrument   Instrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+  type         String     // WARRANTY | LICENSE | CALIBRATION_CERT | MANUAL | CERTIFICATE | DATASHEET | OTHER
+  name         String
+  url          String
+  expiresAt    DateTime?
+  createdAt    DateTime   @default(now())
+}
+
+model Training {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  instrumentId String
+  instrument   Instrument @relation(fields: [instrumentId], references: [id])
+  certifiedAt  DateTime @default(now())
+  expiresAt    DateTime?
+  @@unique([userId, instrumentId])
+}
+
+model MaintenanceLog {
+  id           String   @id @default(cuid())
+  instrumentId String
+  instrument   Instrument @relation(fields: [instrumentId], references: [id])
+  type         String   // "calibration" | "repair" | "preventive"
+  note         String?
+  performedAt  DateTime @default(now())
+  nextDueAt    DateTime?
+}
+
+// ------------------------------------------------------------------
+// Skilled resources / experts (manpower)
+// ------------------------------------------------------------------
+model Expert {
+  id              String      @id @default(cuid())
+  institutionId   String
+  institution     Institution @relation(fields: [institutionId], references: [id])
+  name            String
+  title           String      // role, e.g. "Senior Materials Scientist"
+  photoUrl        String?
+  bio             String?
+  expertise       String[]    @default([]) // areas, e.g. "Failure analysis"
+  skills          String[]    @default([])
+  experienceYears Int?
+  ratePeriod      String      @default("HOURLY") // HOURLY | DAILY | PROJECT
+  rate            Float       @default(0)
+  availability    String?     // e.g. "On request", "Full-time"
+  certifications  String[]    @default([])
+  isActive        Boolean     @default(true)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+}
+
+// ------------------------------------------------------------------
+// Booking & access
+// ------------------------------------------------------------------
+model Booking {
+  id           String        @id @default(cuid())
+  instrumentId String
+  instrument   Instrument    @relation(fields: [instrumentId], references: [id])
+  userId       String
+  user         User          @relation(fields: [userId], references: [id])
+  startAt      DateTime
+  endAt        DateTime
+  purpose      String?
+  status       BookingStatus @default(PENDING)
+  // Self-serve paid booking (industry buyers): price computed at booking time and
+  // settled online. Internal institutional bookings leave these null / NONE.
+  amount         Float?
+  currency       String        @default("INR")
+  paymentStatus  String        @default("NONE") // NONE | PENDING | PAID
+  paymentRef     String?       // gateway payment id
+  paymentOrderId String?       // gateway order id
+  contactName    String?
+  contactEmail   String?
+  contactPhone   String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  reservations CapacityReservation[]
+}
+
+// A held/released reservation against an instrument's capacity pool.
+// TIME_SLOT reservations use startAt/endAt; THROUGHPUT reservations use date + units.
+model CapacityReservation {
+  id             String        @id @default(cuid())
+  instrumentId   String
+  instrument     Instrument    @relation(fields: [instrumentId], references: [id])
+  serviceOrderId String?
+  serviceOrder   ServiceOrder? @relation(fields: [serviceOrderId], references: [id])
+  bookingId      String?
+  booking        Booking?      @relation(fields: [bookingId], references: [id])
+  startAt        DateTime?
+  endAt          DateTime?
+  date           DateTime?
+  units          Int           @default(1)
+  status         String        @default("HELD") // HELD | RELEASED
+  createdAt      DateTime      @default(now())
+}
+
+// ------------------------------------------------------------------
+// Services & managed order workflow
+// ------------------------------------------------------------------
+model Service {
+  id             String   @id @default(cuid())
+  institutionId  String
+  institution    Institution @relation(fields: [institutionId], references: [id])
+  instrumentId   String?
+  instrument     Instrument? @relation(fields: [instrumentId], references: [id])
+  facilityId     String?             // the facility/lab that runs this service (defaults to the instrument's facility)
+  facility       Facility?   @relation(fields: [facilityId], references: [id])
+  name           String
+  category       String
+  description    String?
+  images         String[] @default([]) // photo gallery
+  deliverable    String?          // what the buyer receives (legacy single string)
+  // Provider overrides for buyer requirements. null / empty = inherit the linked
+  // catalog test's value. Prefilled from the catalog at enrolment, then editable here.
+  samplesRequired    Int?               // override number of specimens
+  sampleRequirements String?            // override sample spec/prep notes
+  sampleDestructive  Boolean?           // override
+  sampleReturned     Boolean?           // override
+  deliverables       String[] @default([]) // override deliverables list
+  intakeForms        Json     @default("[]") // provider intake questions: [{ name, description, required }]
+  turnaroundDays Int      @default(7)
+  rushDays       Int?              // expedited turnaround (must be < turnaroundDays)
+  rushSurchargePct Float?          // % surcharge on price for expedited (e.g. 40 = +40%)
+  priceInternal  Float    @default(0)
+  priceAcademic  Float    @default(0)
+  priceIndustry  Float    @default(0)
+  pricingMethod  String   @default("FLAT") // FLAT | PER_HOUR | PER_SAMPLE | PER_TEST | PER_DAY | PER_UNIT | TIERED
+  unitLabel      String?          // e.g. "per sample", "per hour"
+  setupFee       Float    @default(0)
+  minCharge      Float    @default(0)
+  discountPct    Float    @default(0)   // standing service-level discount (provider-funded, fee-on-discounted)
+  discountLabel  String?               // optional badge, e.g. "Launch offer"
+  accreditation  String?          // e.g. "NABL", "ISO 17025"
+  pricingMode    PricingMode @default(QUOTE) // QUOTE = RFQ; FIXED = listed price, buy directly
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  orders        ServiceOrder[]
+  testProviders TestProvider[]   // catalog: which tests this service fulfils
+  bundleItems   ServiceBundleItem[]
+}
+
+// Parent basket: one buyer builds an Order across MULTIPLE services & providers.
+model Order {
+  id          String   @id @default(cuid())
+  code        String   @unique          // e.g. RIN-2026-0001
+  buyerId     String
+  buyer       User     @relation("BuyerCarts", fields: [buyerId], references: [id])
+  status      String   @default("OPEN") // OPEN (cart) -> CHECKED_OUT
+  subtotal    Float    @default(0)      // sum of buyer-facing line amounts (after discount)
+  platformFee Float    @default(0)
+  taxAmount   Float    @default(0)
+  total       Float    @default(0)
+  discountAmount Float @default(0)      // coupon discount applied at checkout
+  creditApplied  Float @default(0)      // wallet credits redeemed against this order
+  couponCode     String?               // denormalized code for display
+  currency    String   @default("INR")
+  shippingNote String?                    // buyer's shipping / handling instructions for samples
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  lines   ServiceOrder[]
+  samples OrderSample[]
+}
+
+// A physical sample/specimen the buyer supplies for an order (declared at checkout).
+model OrderSample {
+  id          String   @id @default(cuid())
+  orderId     String
+  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  label       String                       // e.g. "Coupon A", "Battery cell #3"
+  description String?
+  quantity    Int      @default(1)
+  condition   String?                      // as-received condition / prep notes
+  status      String   @default("AWAITING_SHIPMENT") // AWAITING_SHIPMENT | RECEIVED | IN_TESTING | RETURNED | CONSUMED
+  createdAt   DateTime @default(now())
+}
+
+model ServiceOrder {
+  id             String      @id @default(cuid())
+  code           String      @unique          // human-friendly e.g. ORD-2026-0001
+  orderId        String?                       // parent basket (aggregator cart) — null for legacy single-line orders
+  order          Order?      @relation(fields: [orderId], references: [id])
+  serviceId      String
+  service        Service     @relation(fields: [serviceId], references: [id])
+  institutionId  String
+  institution    Institution @relation(fields: [institutionId], references: [id])
+  buyerId        String
+  buyer          User        @relation("BuyerOrders", fields: [buyerId], references: [id])
+  status         OrderStatus @default(QUOTE_REQUESTED)
+  tier           PricingTier @default(INDUSTRY)
+  sampleDetails  String?
+  quantity       Int         @default(1)
+  expedited      Boolean     @default(false)   // buyer chose the expedited turnaround tier
+  requirements   String?
+  quotedPrice    Float?
+  slaDays        Int?
+  providerAmount    Float?   // amount that flows to the provider (per line, incl. quantity)
+  platformFeeAmount Float?   // platform fee portion for this line
+  buyerAmount       Float?   // buyer-facing amount for this line (fee-inclusive where applicable)
+  listPrice         Float?   // pre-discount buyer price (service- or quote-level discount) for "was ₹X" display
+  ndaSigned      Boolean     @default(false)
+  ndaSignedAt    DateTime?
+  reportUrl      String?
+  // Buyer answers to the provider's intake questions, captured at checkout:
+  // [{ name, type, answer, required }] — answer is the file URL for FILE-type fields.
+  intakeAnswers  Json        @default("[]")
+  dueAt          DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  events       OrderEvent[]
+  invoice      Invoice?
+  review       Review?
+  settlement   Settlement?
+  reservations CapacityReservation[]
+  documents    OrderDocument[]
+  messages     OrderMessage[]
+}
+
+// Files attached to an order line by any party (buyer supporting docs, provider
+// reports/deliverables, platform). Real uploaded files served from /uploads.
+model OrderDocument {
+  id             String       @id @default(cuid())
+  serviceOrderId String
+  serviceOrder   ServiceOrder @relation(fields: [serviceOrderId], references: [id], onDelete: Cascade)
+  uploadedById   String?
+  uploadedBy     User?        @relation(fields: [uploadedById], references: [id])
+  authorRole     String       // buyer | provider | platform
+  authorName     String
+  kind           String       @default("OTHER") // SUPPORTING | REPORT | DELIVERABLE | OTHER
+  deliverable    String?      // which deliverable-checklist item this file fulfils (provider uploads)
+  name           String
+  url            String
+  createdAt      DateTime     @default(now())
+}
+
+// A message in the order thread, visible to buyer + assigned provider(s) + platform.
+model OrderMessage {
+  id             String       @id @default(cuid())
+  serviceOrderId String
+  serviceOrder   ServiceOrder @relation(fields: [serviceOrderId], references: [id], onDelete: Cascade)
+  userId         String?
+  user           User?        @relation(fields: [userId], references: [id])
+  authorRole     String       // buyer | provider | platform
+  authorName     String
+  body           String
+  createdAt      DateTime     @default(now())
+}
+
+model OrderEvent {
+  id        String   @id @default(cuid())
+  orderId   String
+  order     ServiceOrder @relation(fields: [orderId], references: [id])
+  type      String   // status change / note / sample_received / report_uploaded
+  message   String
+  actor     String?
+  createdAt DateTime @default(now())
+}
+
+model Review {
+  id        String   @id @default(cuid())
+  orderId   String   @unique
+  order     ServiceOrder @relation(fields: [orderId], references: [id])
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  rating    Int      // 1..5
+  comment   String?
+  createdAt DateTime @default(now())
+}
+
+// ------------------------------------------------------------------
+// Billing, payments, settlement
+// ------------------------------------------------------------------
+model Invoice {
+  id            String        @id @default(cuid())
+  number        String        @unique
+  orderId       String        @unique
+  order         ServiceOrder  @relation(fields: [orderId], references: [id])
+  institutionId String
+  institution   Institution   @relation(fields: [institutionId], references: [id])
+  subtotal      Float
+  taxRate       Float
+  taxAmount     Float
+  total         Float
+  currency      String        @default("INR")
+  status        InvoiceStatus @default(ISSUED)
+  issuedAt      DateTime      @default(now())
+  dueAt         DateTime?
+
+  payment Payment?
+}
+
+model Payment {
+  id        String        @id @default(cuid())
+  invoiceId String        @unique
+  invoice   Invoice       @relation(fields: [invoiceId], references: [id])
+  amount    Float
+  method    String        // upi | card | netbanking | wire
+  reference String?
+  status    PaymentStatus @default(PENDING)
+  paidAt    DateTime?
+  createdAt DateTime      @default(now())
+}
+
+// Cross-institution exchange settlement (platform take-rate)
+model Settlement {
+  id            String           @id @default(cuid())
+  orderId       String           @unique
+  order         ServiceOrder     @relation(fields: [orderId], references: [id])
+  grossAmount   Float
+  takeRate      Float
+  platformFee   Float
+  netToProvider Float
+  status        SettlementStatus @default(PENDING)
+  releasedAt    DateTime?
+  createdAt     DateTime         @default(now())
+}
+
+// ------------------------------------------------------------------
+// Platform configuration (singleton)
+// ------------------------------------------------------------------
+model PlatformSetting {
+  id        String   @id @default("global")
+  feeMode   String   @default("MARKUP_PERCENT") // MARKUP_PERCENT | FIXED_FEE | SETTLEMENT_DEDUCTION
+  feeValue  Float    @default(0)
+
+  // ---- Payment gateway (Razorpay) ----
+  razorpayEnabled   Boolean @default(false)
+  razorpayKeyId     String?
+  razorpayKeySecret String?
+
+  // ---- Email notifications (SMTP) ----
+  emailEnabled Boolean @default(false)
+  smtpHost     String?
+  smtpPort     Int?
+  smtpUser     String?
+  smtpPass     String?
+  emailFrom    String?
+
+  // ---- WhatsApp notifications (Twilio) ----
+  whatsappEnabled Boolean @default(false)
+  twilioSid       String?
+  twilioToken     String?
+  twilioFrom      String?   // e.g. whatsapp:+14155238886
+
+  updatedAt DateTime @updatedAt
+}
+
+// ------------------------------------------------------------------
+// Configurable test catalog — Industries, Tests, Packages
+// (backend is the source of truth; frontend loads it via /api/industries)
+// ------------------------------------------------------------------
+model Industry {
+  id             String   @id @default(cuid())
+  slug           String   @unique
+  title          String
+  icon           String?           // lucide icon key rendered on the frontend
+  seoTitle       String?
+  seoDescription String?
+  heroTagline    String?
+  intro          String?
+  seoKeywords       String[] @default([])
+  relatedCategories String[] @default([])
+  faq            Json?    @default("[]") // [{ q, a }] — also emitted as FAQPage JSON-LD
+  order          Int      @default(0)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  standards IndustryStandard[]
+  tests     TestDefinition[]
+  packages  TestPackage[]
+  testRequests TestRequest[]
+  serviceBundles ServiceBundle[]
+}
+
+model IndustryStandard {
+  id         String   @id @default(cuid())
+  industryId String
+  industry   Industry @relation(fields: [industryId], references: [id], onDelete: Cascade)
+  code       String
+  name       String
+  order      Int      @default(0)
+}
+
+model TestDefinition {
+  id                 String   @id @default(cuid())
+  slug               String   @unique
+  industryId         String
+  industry           Industry @relation(fields: [industryId], references: [id], onDelete: Cascade)
+  name               String
+  category           String            // maps to Service/Instrument category for provider matching
+  summary            String?
+  purpose            String?           // why this test is done / what it proves
+  description        String?
+  standardCodes      String[] @default([])
+  sampleRequirements String?           // human spec: dimensions/condition/prep
+  samplesRequired    Int      @default(1)   // number of physical samples/specimens needed
+  sampleDestructive  Boolean  @default(false) // sample is consumed/destroyed during test
+  sampleReturned     Boolean  @default(false) // sample returned to buyer after test
+  deliverables       String[] @default([])   // e.g. "Test report (PDF)", "Raw data", "NABL certificate"
+  conformanceRows    Json     @default("[]")  // structured conformance: [{ standard, clause, testNo, condition, severity }]
+  fixturesRequired   String[] @default([])   // test jigs / pre-post-exposure rigs / prerequisites for conduct
+  severityNotes      String?                  // broad details of test conformance severities
+  turnaroundDays     Int      @default(7)
+  accreditation      String?           // accreditation a provider must hold to qualify (hard filter)
+  order              Int      @default(0)
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  procedures   TestProcedureStep[]
+  forms        TestForm[]
+  providers    TestProvider[]
+  packageItems TestPackageItem[]
+
+  // self many-to-many: associated / related tests
+  associatedTo   TestDefinition[] @relation("AssociatedTests")
+  associatedFrom TestDefinition[] @relation("AssociatedTests")
+}
+
+model TestProcedureStep {
+  id      String         @id @default(cuid())
+  testId  String
+  test    TestDefinition @relation(fields: [testId], references: [id], onDelete: Cascade)
+  stepNo  Int
+  title   String
+  detail  String?
+}
+
+model TestForm {
+  id          String         @id @default(cuid())
+  testId      String
+  test        TestDefinition @relation(fields: [testId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  fileUrl     String?
+  required    Boolean        @default(false)
+}
+
+// Links a catalog test to a provider's Service (price/turnaround/capacity live on Service+Instrument).
+model TestProvider {
+  id            String         @id @default(cuid())
+  testId        String
+  test          TestDefinition @relation(fields: [testId], references: [id], onDelete: Cascade)
+  serviceId     String
+  service       Service        @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  priceOverride Float?         // optional per-link price; else use Service.priceIndustry
+  isPreferred   Boolean        @default(false)
+  createdAt     DateTime       @default(now())
+
+  @@unique([testId, serviceId])
+}
+
+// A curated package/bundle of tests (e.g. a certification package).
+model TestPackage {
+  id            String   @id @default(cuid())
+  slug          String   @unique
+  industryId    String?
+  industry      Industry? @relation(fields: [industryId], references: [id], onDelete: SetNull)
+  name          String
+  summary       String?
+  description   String?
+  pricingMode   String   @default("DYNAMIC") // DYNAMIC = sum of routed providers; FIXED = flat
+  fixedPrice    Float?                        // used when pricingMode = FIXED
+  discountPct   Float    @default(0)          // applied to the dynamic sum
+  accreditation String?
+  sampleFlow    String   @default("PER_TEST") // SHARED = one specimen flows through tests in sequence; PER_TEST = each test needs its own sample
+  order         Int      @default(0)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  items TestPackageItem[]
+}
+
+model TestPackageItem {
+  id        String         @id @default(cuid())
+  packageId String
+  package   TestPackage    @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  testId    String
+  test      TestDefinition @relation(fields: [testId], references: [id], onDelete: Cascade)
+  sequence  Int            @default(0)
+  optional  Boolean        @default(false)
+  dependsOnTestId String?                  // prerequisite: this item can't start until that test is delivered
+
+  @@unique([packageId, testId])
+}
+
+// Buyer-facing "technology" grouping (Precision Machining, Microscopy, …).
+// `categories` map to Instrument/Service/Test categories the technology covers.
+model Technology {
+  id         String   @id @default(cuid())
+  slug       String   @unique
+  title      String
+  icon       String?
+  blurb      String?
+  categories String[] @default([])
+  order      Int      @default(0)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+// A provider's request to add a NEW test to the catalog — reviewed by the platform.
+model TestRequest {
+  id                 String            @id @default(cuid())
+  institutionId      String
+  institution        Institution       @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  industryId         String?
+  industry           Industry?         @relation(fields: [industryId], references: [id], onDelete: SetNull)
+  name               String
+  category           String
+  summary            String?
+  description        String?
+  standardCodes      String[]          @default([])
+  sampleRequirements String?
+  turnaroundDays     Int               @default(7)
+  serviceId          String?           // requester's service to auto-enrol on approval
+  status             TestRequestStatus @default(PENDING)
+  reviewNote         String?
+  createdTestId      String?           // TestDefinition created on approval
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+}
+
+// ------------------------------------------------------------------
+// Audit
+// ------------------------------------------------------------------
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  action    String
+  entity    String
+  entityId  String?
+  meta      Json?
+  createdAt DateTime @default(now())
+}
+
+// ------------------------------------------------------------------
+// Discounts & credits
+// ------------------------------------------------------------------
+// A discount code. funder decides who bears the cost: PLATFORM (absorbed from
+// the platform fee) or PROVIDER (recomputed on the discounted price, so the
+// platform fee shrinks proportionally).
+model Coupon {
+  id            String   @id @default(cuid())
+  code          String   @unique          // stored uppercase
+  name          String
+  kind          String   @default("PERCENT") // PERCENT | FIXED
+  value         Float                        // percent (0-100) or fixed amount
+  funder        String   @default("PLATFORM") // PLATFORM | PROVIDER
+  institutionId String?                       // set for PROVIDER coupons
+  institution   Institution? @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  appliesTo     String   @default("ALL")      // ALL | CATEGORY | SERVICE
+  categories    String[] @default([])         // when appliesTo = CATEGORY
+  serviceIds    String[] @default([])         // when appliesTo = SERVICE
+  minOrder      Float    @default(0)          // minimum eligible subtotal
+  maxDiscount   Float?                        // cap for PERCENT coupons
+  startsAt      DateTime?
+  endsAt        DateTime?
+  usageLimit    Int?                          // total redemptions allowed
+  perBuyerLimit Int      @default(1)          // redemptions per buyer (0 = unlimited)
+  timesUsed     Int      @default(0)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  redemptions   CouponRedemption[]
+  @@index([institutionId])
+}
+
+model CouponRedemption {
+  id        String   @id @default(cuid())
+  couponId  String
+  coupon    Coupon   @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  orderId   String                            // parent Order (basket)
+  buyerId   String
+  buyer     User     @relation(fields: [buyerId], references: [id])
+  amount    Float
+  createdAt DateTime @default(now())
+  @@index([couponId])
+  @@index([buyerId])
+}
+
+// A provider-owned bundle: a lab groups ITS OWN services and offers a combined
+// discount (provider-funded, fee-on-discounted). Distinct from TestPackage,
+// which bundles catalog tests routed across many providers.
+model ServiceBundle {
+  id            String   @id @default(cuid())
+  institutionId String
+  institution   Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  industryId    String?                // domain the bundle is browsed under
+  industry      Industry? @relation(fields: [industryId], references: [id], onDelete: SetNull)
+  slug          String   @unique
+  name          String
+  description   String?
+  discountPct   Float    @default(0)   // combined discount off the sum of member services
+  images        String[] @default([])
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  items ServiceBundleItem[]
+  @@index([institutionId])
+}
+
+model ServiceBundleItem {
+  id        String        @id @default(cuid())
+  bundleId  String
+  bundle    ServiceBundle @relation(fields: [bundleId], references: [id], onDelete: Cascade)
+  serviceId String
+  service   Service       @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  @@unique([bundleId, serviceId])
+}
+
+// Buyer wallet ledger. Balance = sum of amount over non-expired entries.
+// ISSUE/REFUND are positive; REDEEM/EXPIRE are negative.
+model CreditEntry {
+  id            String   @id @default(cuid())
+  buyerId       String
+  buyer         User     @relation(fields: [buyerId], references: [id])
+  type          String                        // ISSUE | REDEEM | REFUND | EXPIRE
+  amount        Float                         // +credit added / -credit used
+  funder        String   @default("PLATFORM") // PLATFORM | PROVIDER
+  institutionId String?                        // provider-restricted credits
+  institution   Institution? @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  orderId       String?                        // set on REDEEM
+  reason        String?
+  expiresAt     DateTime?
+  createdById   String?
+  createdAt     DateTime @default(now())
+  @@index([buyerId])
+  @@index([institutionId])
+}
