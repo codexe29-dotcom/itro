@@ -11,6 +11,19 @@ import { publicObjectUrl } from "./lib/storage";
 
 const app = express();
 
+app.disable("x-powered-by");
+
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "interest-cohort=()");
+  if (env.nodeEnv === "production") {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
+  next();
+});
+
 app.use(express.json({ limit: "2mb" }));
 
 // Only the separate public image directory is exposed; private files are never static.

@@ -29,7 +29,8 @@ const envSchema = {
 const nodeEnv = envSchema.nodeEnv.parse(process.env.NODE_ENV ?? "development");
 const port = envSchema.port.parse(process.env.PORT ?? "4000");
 const databaseUrl = envSchema.databaseUrl.parse(process.env.DATABASE_URL ?? "").trim();
-const jwtSecret = envSchema.jwtSecret.parse(process.env.JWT_SECRET ?? "").trim();
+const rawJwtSecret = envSchema.jwtSecret.parse(process.env.JWT_SECRET ?? "").trim();
+const jwtSecret = rawJwtSecret || (nodeEnv === "production" ? "" : "dev-only-secret-do-not-use-in-production-min32");
 const storageDriverInput = (process.env.STORAGE_DRIVER ?? "").trim().toLowerCase();
 const storageDriver = envSchema.storageDriver.parse(
   storageDriverInput || (nodeEnv === "production" ? "s3" : "local"),
@@ -153,19 +154,25 @@ const storageConfigurationError = (() => {
 })();
 
 const databaseConfigurationError = validateDatabaseUrl(databaseUrl);
-const jwtSecretError = validateJwtSecret(jwtSecret);
+const jwtSecretError = validateJwtSecret(rawJwtSecret);
 
-if (nodeEnv === "development") {
+if (nodeEnv === "development" || nodeEnv === "test") {
   if (databaseConfigurationError) {
-    console.warn(`[configuration] DEVELOPMENT MODE: ${databaseConfigurationError}`);
+    if (nodeEnv === "development") {
+      console.warn(`[configuration] DEVELOPMENT MODE: ${databaseConfigurationError}`);
+    }
   }
 
   if (storageConfigurationError) {
-    console.warn(`[configuration] DEVELOPMENT MODE: ${storageConfigurationError}`);
+    if (nodeEnv === "development") {
+      console.warn(`[configuration] DEVELOPMENT MODE: ${storageConfigurationError}`);
+    }
   }
 
   if (jwtSecretError) {
-    console.warn(`[configuration] DEVELOPMENT MODE: ${jwtSecretError}`);
+    if (nodeEnv === "development") {
+      console.warn(`[configuration] DEVELOPMENT MODE: ${jwtSecretError}`);
+    }
   }
 } else {
   if (databaseConfigurationError) {

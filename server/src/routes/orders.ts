@@ -584,8 +584,24 @@ ordersRouter.post("/:id/pay", requireAuth, requireRole("INDUSTRY_BUYER"), async 
 
   if (payable.length === 0) throw new AppError(409, "Nothing to pay on this order");
 
+  const isSuperAdmin = u.role === "SUPER_ADMIN";
+  const isOffline = method === "wire";
+
+  if (env.nodeEnv === "production" && !isSuperAdmin && !isOffline) {
+    throw new AppError(400, "Online payments must be processed through the secure payment gateway");
+  }
+
+  const paymentStatus: "SUCCESS" | "PENDING" = isSuperAdmin
+    ? "SUCCESS"
+    : isOffline
+      ? "PENDING"
+      : env.nodeEnv === "development"
+        ? "SUCCESS"
+        : "PENDING";
+  const newInvoiceStatus = paymentStatus === "SUCCESS" ? "PAID" : "ISSUED";
+
   const now = new Date();
-  const paid = await prisma.$transaction(async (tx) => {
+  const processed = await prisma.$transaction(async (tx) => {
     const done: string[] = [];
     for (const inv of payable) {
       const existing = await tx.payment.findUnique({ where: { invoiceId: inv.id } });
@@ -596,14 +612,23 @@ ordersRouter.post("/:id/pay", requireAuth, requireRole("INDUSTRY_BUYER"), async 
             amount: inv.total,
             method,
             reference: body.reference ?? `PAY-${now.getTime()}-${inv.number}`,
-            status: "SUCCESS",
-            paidAt: now,
+            status: paymentStatus,
+            paidAt: paymentStatus === "SUCCESS" ? now : null,
           },
         });
       }
-      await tx.invoice.update({ where: { id: inv.id }, data: { status: "PAID" } });
+      if (newInvoiceStatus === "PAID") {
+        await tx.invoice.update({ where: { id: inv.id }, data: { status: "PAID" } });
+      }
       await tx.orderEvent.create({
-        data: { orderId: inv.orderId, type: "note", message: `Invoice ${inv.number} paid via ${method}`, actor: u.id },
+        data: {
+          orderId: inv.orderId,
+          type: "note",
+          message: paymentStatus === "SUCCESS"
+            ? `Invoice ${inv.number} payment confirmed via ${method}`
+            : `Payment reference submitted for invoice ${inv.number} via ${method} — awaiting verification`,
+          actor: u.id,
+        },
       });
       done.push(inv.id);
     }
@@ -611,7 +636,7 @@ ordersRouter.post("/:id/pay", requireAuth, requireRole("INDUSTRY_BUYER"), async 
   });
 
   await prisma.auditLog.create({
-    data: { userId: u.id, action: "pay", entity: "Order", entityId: parent.id, meta: { invoices: paid.length } },
+    data: { userId: u.id, action: "pay", entity: "Order", entityId: parent.id, meta: { invoices: processed.length, status: paymentStatus } },
   });
 
   const full = await prisma.order.findUnique({

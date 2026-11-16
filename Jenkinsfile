@@ -126,6 +126,7 @@ pipeline {
             steps {
                 sh 'npm ci'
                 sh 'npm --workspace server run build'
+                sh 'npm --workspace server run test'
                 sh 'npm --workspace web test'
                 sh 'npx playwright install chromium'
                 withEnv([

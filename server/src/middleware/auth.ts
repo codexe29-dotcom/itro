@@ -19,13 +19,22 @@ declare global {
   }
 }
 
-/** Verify the Bearer JWT and attach req.user. */
+/** Verify the Bearer JWT or session cookie and attach req.user. */
 export async function requireAuth(req: Request, _res: Response, next: NextFunction): Promise<void> {
-  const cookie = req.headers.cookie
-    ?.split(";")
-    .map((part) => part.trim())
-    .find((part) => part.startsWith("rix_session="));
-  const token = cookie?.slice("rix_session=".length);
+  let token: string | undefined;
+
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    token = authHeader.slice("Bearer ".length).trim();
+  }
+
+  if (!token) {
+    const cookie = req.headers.cookie
+      ?.split(";")
+      .map((part) => part.trim())
+      .find((part) => part.startsWith("rix_session="));
+    token = cookie?.slice("rix_session=".length);
+  }
 
   if (!token) {
     throw new AppError(401, "Authentication required");
